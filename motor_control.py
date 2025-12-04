@@ -4,8 +4,8 @@ import time
 MCP4725_ADDR = 0x60
 SPEED = 0 # 0 -> 100
 
-FR_PIN = Pin(4, Pin.IN)  # Forward/Reverse initial High-Z
-EN_PIN = Pin(5, Pin.IN)  # Enable initial High-Z
+EN_PIN = Pin(4, Pin.OUT)
+FR_PIN = Pin(5, Pin.OUT)
 
 # I2C initialisieren (für Pico 2: I2C1 -> SDA=Pin 2, SCL=Pin 3)
 i2c = I2C(1, scl=Pin(3), sda=Pin(2), freq=400000)
@@ -21,24 +21,15 @@ def write_dac(value: int):
     low  = (value << 4) & 0xFF
     i2c.writeto(MCP4725_ADDR, bytes([0x40, high, low]))
 
-def set_open(pin):
-    """Setzt den Pin auf High-Z (Input, kein Pull-Up)"""
-    pin.init(Pin.IN)
-
-def pull_gnd(pin):
-    """Zieht den Pin auf GND (Output Low)"""
-    pin.init(Pin.OUT)
-    pin.value(0)
-
 # =================================================================================
 
 def enable_motor():
     """Motor einschalten"""
-    pull_gnd(EN_PIN)
+    EN_PIN.value(1)
 
 def disable_motor():
     """Motor ausschalten"""
-    set_open(EN_PIN)
+    EN_PIN.value(0)
 
 def set_motor_direction(direction):
     """
@@ -46,13 +37,13 @@ def set_motor_direction(direction):
     direction = "forward" oder "reverse"
     Motor muss vorher gestoppt sein (disable)
     """
-    set_open(FR_PIN)  # zuerst auf High-Z
+    FR_PIN.value(0)
     time.sleep(0.1)   # kleine Pause für Sicherheit
 
     if direction.lower() == "forward":
-        set_open(FR_PIN)  # offen = forward
+        FR_PIN.value(0)
     elif direction.lower() == "reverse":
-        pull_gnd(FR_PIN)  # GND = reverse
+        FR_PIN.value(1)
     else:
         raise ValueError("direction muss 'forward' oder 'reverse' sein")
 
@@ -140,5 +131,5 @@ try:
 finally:
     # Motor stoppen und Pins freigeben
     disable_motor()
-    set_open(FR_PIN)
+    FR_PIN.value(0)
     print("Motor gestoppt")
