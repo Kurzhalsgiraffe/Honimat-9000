@@ -73,9 +73,13 @@ class I2cLcd:
 i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
 lcd = I2cLcd(i2c, 0x27, 2, 16)
 
-lcd.putstr("Hallo Welt!")
-sleep_ms(2000)
+while True:
+    lcd.move_to(0, 0)
+    lcd.putstr("Hallo Welt!")
+    sleep_ms(2000)
+    lcd.clear()
 
-lcd.clear()
-lcd.move_to(0, 1)
-lcd.putstr("Adresse 0x27")
+    lcd.move_to(0, 1)
+    lcd.putstr("Adresse 0x27")
+    sleep_ms(2000)
+    lcd.clear()
