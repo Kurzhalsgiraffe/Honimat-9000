@@ -69,30 +69,6 @@ class I2cLcd:
         for c in s:
             self.write_byte(ord(c), 1)
 
-    def display_text(self, line1, line2):
-        self.clear()
-        self.move_to(0, 0)
-        self.putstr(line1[:16])
-        self.move_to(0, 1)
-        self.putstr(line2[:16])
-
-    def display_menu(self, mode, speed, direction):
-        # ----------------
-        # Modus    %    ->
-        # AUTO50  | 99 | R
-        # AUTO100 | 99 | R
-        # Manuell | 99 | R
-
-        mode_fmt = (mode + " " * 7)[:7]
-        speed_fmt = ("%02d" % min(abs(speed), 99))
-        arrow = "<-" if direction == "left" else "->"
-        dir_char = "L" if direction == "left" else "R"
-
-        header = "Modus    %    " + arrow
-        line   = "{} | {} | {}".format(mode_fmt, speed_fmt, dir_char)
-
-        self.display_text(header, line)
-
 class Display:
     def __init__(self, mode:str, speed:int, direction:str) -> None:
         self.mode = mode
@@ -102,17 +78,60 @@ class Display:
         self.display_i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
         self.lcd = I2cLcd(self.display_i2c, 0x27, 2, 16)
 
+    def display_text(self, line1, line2):
+        self.lcd.clear()
+        self.lcd.move_to(0, 0)
+        self.lcd.putstr(line1[:16])
+        self.lcd.move_to(0, 1)
+        self.lcd.putstr(line2[:16])
+
+    def display_menu(self, mode:str, speed:int, direction:str):
+        # ----------------
+        # Modus    %    ->
+        # AUTO50  | 99 | R
+        # AUTO100 | 99 | R
+        # Manuell | 99 | R
+
+        mode_fmt = (mode + " " * 7)[:7]
+        speed_fmt = ("%02d" % min(abs(speed), 99)) if speed > 0 else "--"
+        arrow = "<-" if direction == "left" else ("->" if direction == "right" else "  ")
+        dir_char = "L" if direction == "left" else ("R" if direction == "right" else "-")
+
+        header = "Modus    %    " + arrow
+        line   = "{} | {} | {}".format(mode_fmt, speed_fmt, dir_char)
+
+        self.display_text(header, line)
+
+    def update_mode(self, mode):
+        mode_fmt = (mode + " " * 7)[:7]
+        self.lcd.move_to(0, 1)
+        self.lcd.putstr(mode_fmt)
+
+    def update_speed(self, speed):
+        speed_fmt = ("%02d" % min(abs(speed), 99)) if speed > 0 else "--"
+        self.lcd.move_to(10, 1)   # Position der Prozentzahl
+        self.lcd.putstr(speed_fmt)
+
+    def update_direction(self, direction):
+        arrow = "<-" if direction == "left" else ("->" if direction == "right" else "  ")
+        dir_char = "L" if direction == "left" else ("R" if direction == "right" else "-")
+
+        self.lcd.move_to(15, 1)
+        self.lcd.putstr(dir_char)
+        self.lcd.move_to(14, 0)
+        self.lcd.putstr(arrow)
+
     def set_mode(self, mode):
         self.mode = mode
-        self.lcd.display_menu(self.mode, self.speed, self.direction)
+        self.update_mode(mode)
 
     def set_speed(self, speed):
         self.speed = speed
-        self.lcd.display_menu(self.mode, self.speed, self.direction)
+        self.update_speed(speed)
 
     def set_direction(self, direction):
         self.direction = direction
-        self.lcd.display_menu(self.mode, self.speed, self.direction)
+        self.update_direction(direction)
 
 # ===================== Display Init =====================
 
@@ -171,12 +190,29 @@ def set_motor_speed(speed: int):
 
 def gentle_break(current_speed):
     global MOTOR_RUNNING
-    for i in range(current_speed,0,-1):
-        set_motor_speed(int(i))
-        DISPLAY.set_speed(i)
-        time.sleep(0.1)
+    motor_ramp_down(current_speed, 0.1)
     disable_motor()
     MOTOR_RUNNING = False
+
+def safe_motor_ramp_up(direction, max_speed, sleep_interval) -> bool:
+    set_motor_direction(direction)
+    DISPLAY.set_direction(direction)
+
+    for speed in range(max_speed+1):
+        if not RUNNING_FLAG:
+            gentle_break(speed)
+            return False
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(sleep_interval)
+    return True
+
+def motor_ramp_down(current_speed, sleep_interval):
+    for speed in range(current_speed,-1,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(sleep_interval)
+    DISPLAY.set_direction(None)
 
 # ===================== ISR HANDLER =====================
 last_start_stop = 0
@@ -213,218 +249,107 @@ def run_motor_mode_0():
     enable_motor()
 
     hold_time_s = 10
+    sleep_interval = 0.1
 
     # -------- 25 % --------
     max_speed = 25
 
-    # right
-    set_motor_direction("right")
-    DISPLAY.set_direction("right")
-    # ramp up
-    for speed in range(max_speed):
-        if not RUNNING_FLAG:
-            gentle_break(speed)
-            return
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    if not safe_motor_ramp_up("right", max_speed, sleep_interval):
+        return
 
-    # hold
     for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
             gentle_break(max_speed)
             return
-        time.sleep(0.1)
+        time.sleep(sleep_interval)
 
-    # ramp down
-    for speed in range(max_speed,0,-1):
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    motor_ramp_down(max_speed, sleep_interval)
+    time.sleep(2)
+    if not safe_motor_ramp_up("left", max_speed, sleep_interval):
+        return
 
-    # left
-    set_motor_direction("left")
-    DISPLAY.set_direction("left")
-    # ramp up
-    for speed in range(max_speed):
-        if not RUNNING_FLAG:
-            gentle_break(speed)
-            return
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
-
-    # hold
     for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
             gentle_break(max_speed)
             return
-        time.sleep(0.1)
+        time.sleep(sleep_interval)
 
-    # ramp down
-    for speed in range(max_speed,0,-1):
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    motor_ramp_down(max_speed, sleep_interval)
 
     # -------- 50 % --------
     max_speed = 50
 
-    # right
-    set_motor_direction("right")
-    DISPLAY.set_direction("right")
-    # ramp up
-    for speed in range(max_speed):
-        if not RUNNING_FLAG:
-            gentle_break(speed)
-            return
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    if not safe_motor_ramp_up("right", max_speed, sleep_interval):
+        return
 
-    # hold
     for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
             gentle_break(max_speed)
             return
-        time.sleep(0.1)
+        time.sleep(sleep_interval)
 
-    # ramp down
-    for speed in range(max_speed,0,-1):
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    motor_ramp_down(max_speed, sleep_interval)
+    time.sleep(2)
+    if not safe_motor_ramp_up("left", max_speed, sleep_interval):
+        return
 
-    # left
-    set_motor_direction("left")
-    DISPLAY.set_direction("left")
-    # ramp up
-    for speed in range(max_speed):
-        if not RUNNING_FLAG:
-            gentle_break(speed)
-            return
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
-
-    # hold
     for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
             gentle_break(max_speed)
             return
-        time.sleep(0.1)
+        time.sleep(sleep_interval)
 
-    # ramp down
-    for speed in range(max_speed,0,-1):
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    motor_ramp_down(max_speed, sleep_interval)
 
     # -------- 75 % --------
     max_speed = 75
 
-    # right
-    set_motor_direction("right")
-    DISPLAY.set_direction("right")
-    # ramp up
-    for speed in range(max_speed):
-        if not RUNNING_FLAG:
-            gentle_break(speed)
-            return
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    if not safe_motor_ramp_up("right", max_speed, sleep_interval):
+        return
 
-    # hold
     for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
             gentle_break(max_speed)
             return
-        time.sleep(0.1)
+        time.sleep(sleep_interval)
 
-    # ramp down
-    for speed in range(max_speed,0,-1):
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    motor_ramp_down(max_speed, sleep_interval)
+    time.sleep(2)
+    if not safe_motor_ramp_up("left", max_speed, sleep_interval):
+        return
 
-    # left
-    set_motor_direction("left")
-    DISPLAY.set_direction("left")
-    # ramp up
-    for speed in range(max_speed):
-        if not RUNNING_FLAG:
-            gentle_break(speed)
-            return
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
-
-    # hold
     for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
             gentle_break(max_speed)
             return
-        time.sleep(0.1)
+        time.sleep(sleep_interval)
 
-    # ramp down
-    for speed in range(max_speed,0,-1):
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    motor_ramp_down(max_speed, sleep_interval)
 
     # -------- 100 % --------
     max_speed = 100
 
-    # right
-    set_motor_direction("right")
-    DISPLAY.set_direction("right")
-    # ramp up
-    for speed in range(max_speed):
-        if not RUNNING_FLAG:
-            gentle_break(speed)
-            return
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    if not safe_motor_ramp_up("right", max_speed, sleep_interval):
+        return
 
-    # hold
     for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
             gentle_break(max_speed)
             return
-        time.sleep(0.1)
+        time.sleep(sleep_interval)
 
-    # ramp down
-    for speed in range(max_speed,0,-1):
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    motor_ramp_down(max_speed, sleep_interval)
+    time.sleep(2)
+    if not safe_motor_ramp_up("left", max_speed, sleep_interval):
+        return
 
-    # left
-    set_motor_direction("left")
-    DISPLAY.set_direction("left")
-    # ramp up
-    for speed in range(max_speed):
-        if not RUNNING_FLAG:
-            gentle_break(speed)
-            return
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
-
-    # hold
     for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
             gentle_break(max_speed)
             return
-        time.sleep(0.1)
+        time.sleep(sleep_interval)
 
-    # ramp down
-    for speed in range(max_speed,0,-1):
-        set_motor_speed(speed)
-        DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+    motor_ramp_down(max_speed, sleep_interval)
 
     disable_motor()
     MOTOR_RUNNING = False
@@ -452,7 +377,7 @@ while True:
 
     # Update LCD only if changed
     if last_displayed_mode != current_mode:
-        DISPLAY.set_mode(current_mode)
+        DISPLAY.display_menu(current_mode, 0, "-")
         last_displayed_mode = current_mode
 
     # Motor starten
