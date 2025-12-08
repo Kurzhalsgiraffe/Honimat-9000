@@ -2,7 +2,6 @@ from machine import ADC, I2C, Pin
 import _thread
 import time
 
-# ===================== LCD CLASS =====================
 class I2cLcd:
     RS = 0
     RW = 1
@@ -70,9 +69,54 @@ class I2cLcd:
         for c in s:
             self.write_byte(ord(c), 1)
 
-# ===================== INIT LCD =====================
-DISPLAY_I2C = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
-LCD = I2cLcd(DISPLAY_I2C, 0x27, 2, 16)
+    def display_text(self, line1, line2):
+        self.clear()
+        self.move_to(0, 0)
+        self.putstr(line1[:16])
+        self.move_to(0, 1)
+        self.putstr(line2[:16])
+
+    def display_menu(self, mode, speed, direction):
+        # ----------------
+        # Modus    %    ->
+        # AUTO50  | 99 | R
+        # AUTO100 | 99 | R
+        # Manuell | 99 | R
+
+        mode_fmt = (mode + " " * 7)[:7]
+        speed_fmt = ("%02d" % min(abs(speed), 99))
+        arrow = "<-" if direction == "left" else "->"
+        dir_char = "L" if direction == "left" else "R"
+
+        header = "Modus    %    " + arrow
+        line   = "{} | {} | {}".format(mode_fmt, speed_fmt, dir_char)
+
+        self.display_text(header, line)
+
+class Display:
+    def __init__(self, mode:str, speed:int, direction:str) -> None:
+        self.mode = mode
+        self.speed = speed
+        self.direction = direction
+
+        self.display_i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
+        self.lcd = I2cLcd(self.display_i2c, 0x27, 2, 16)
+
+    def set_mode(self, mode):
+        self.mode = mode
+        self.lcd.display_menu(self.mode, self.speed, self.direction)
+
+    def set_speed(self, speed):
+        self.speed = speed
+        self.lcd.display_menu(self.mode, self.speed, self.direction)
+
+    def set_direction(self, direction):
+        self.direction = direction
+        self.lcd.display_menu(self.mode, self.speed, self.direction)
+
+# ===================== Display Init =====================
+
+DISPLAY = Display("AUTO100", 0, "right")
 
 # ===================== DAC / MOTOR =====================
 MCP4725_ADDR = 0x60
@@ -95,7 +139,7 @@ MODE_REQUEST = False
 MODE_PRESSED_FLAG = False
 CURRENT_MODE = 0
 
-MODES = ["Auto 100", "Auto 50", "Manuell"]
+MODES = ["AUTO100", "AUTO50", "Manuell"]
 
 # ===================== DAC =====================
 def write_dac(value: int):
@@ -114,12 +158,12 @@ def disable_motor():
 def set_motor_direction(direction):
     FR_PIN.value(0)
     time.sleep(0.1)
-    if direction.lower() == "forward":
+    if direction.lower() == "right":
         FR_PIN.value(0)
-    elif direction.lower() == "reverse":
+    elif direction.lower() == "left":
         FR_PIN.value(1)
     else:
-        raise ValueError("direction muss 'forward' oder 'reverse' sein")
+        raise ValueError("direction must be 'right' or 'left'")
 
 def set_motor_speed(speed: int):
     val = int((speed / 100) * 4095)
@@ -127,21 +171,12 @@ def set_motor_speed(speed: int):
 
 def gentle_break(current_speed):
     global MOTOR_RUNNING
-    for j in range(current_speed,0,-1):
-        set_motor_speed(int(j))
+    for i in range(current_speed,0,-1):
+        set_motor_speed(int(i))
+        DISPLAY.set_speed(i)
         time.sleep(0.1)
     disable_motor()
     MOTOR_RUNNING = False
-
-# ===================== LCD DISPLAY =====================
-def display_text(line1, line2):
-    line1 = line1[:16]
-    line2 = line2[:16]
-    LCD.clear()
-    LCD.move_to(0, 0)
-    LCD.putstr(line1)
-    LCD.move_to(0, 1)
-    LCD.putstr(line2)
 
 # ===================== ISR HANDLER =====================
 last_start_stop = 0
@@ -176,45 +211,219 @@ def run_motor_mode_0():
     global MOTOR_RUNNING, RUNNING_FLAG
     MOTOR_RUNNING = True
     enable_motor()
-    set_motor_direction("forward")
 
+    hold_time_s = 10
+
+    # -------- 25 % --------
+    max_speed = 25
+
+    # right
+    set_motor_direction("right")
+    DISPLAY.set_direction("right")
     # ramp up
-    for speed in range(25):
+    for speed in range(max_speed):
         if not RUNNING_FLAG:
             gentle_break(speed)
             return
         set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
         time.sleep(0.1)
 
-    # 10 Sekunden
-    for _ in range(100):
+    # hold
+    for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
-            gentle_break(25)
+            gentle_break(max_speed)
             return
         time.sleep(0.1)
 
     # ramp down
-    for j in range(25,0,-1):
-        set_motor_speed(j)
+    for speed in range(max_speed,0,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
         time.sleep(0.1)
 
-    # reverse
-    set_motor_direction("reverse")
-    for speed in range(25):
+    # left
+    set_motor_direction("left")
+    DISPLAY.set_direction("left")
+    # ramp up
+    for speed in range(max_speed):
         if not RUNNING_FLAG:
             gentle_break(speed)
             return
         set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
         time.sleep(0.1)
 
-    for _ in range(100):
+    # hold
+    for _ in range(hold_time_s * 10):
         if not RUNNING_FLAG:
-            gentle_break(25)
+            gentle_break(max_speed)
             return
         time.sleep(0.1)
 
-    for j in range(25,0,-1):
-        set_motor_speed(j)
+    # ramp down
+    for speed in range(max_speed,0,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # -------- 50 % --------
+    max_speed = 50
+
+    # right
+    set_motor_direction("right")
+    DISPLAY.set_direction("right")
+    # ramp up
+    for speed in range(max_speed):
+        if not RUNNING_FLAG:
+            gentle_break(speed)
+            return
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # hold
+    for _ in range(hold_time_s * 10):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(0.1)
+
+    # ramp down
+    for speed in range(max_speed,0,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # left
+    set_motor_direction("left")
+    DISPLAY.set_direction("left")
+    # ramp up
+    for speed in range(max_speed):
+        if not RUNNING_FLAG:
+            gentle_break(speed)
+            return
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # hold
+    for _ in range(hold_time_s * 10):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(0.1)
+
+    # ramp down
+    for speed in range(max_speed,0,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # -------- 75 % --------
+    max_speed = 75
+
+    # right
+    set_motor_direction("right")
+    DISPLAY.set_direction("right")
+    # ramp up
+    for speed in range(max_speed):
+        if not RUNNING_FLAG:
+            gentle_break(speed)
+            return
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # hold
+    for _ in range(hold_time_s * 10):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(0.1)
+
+    # ramp down
+    for speed in range(max_speed,0,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # left
+    set_motor_direction("left")
+    DISPLAY.set_direction("left")
+    # ramp up
+    for speed in range(max_speed):
+        if not RUNNING_FLAG:
+            gentle_break(speed)
+            return
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # hold
+    for _ in range(hold_time_s * 10):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(0.1)
+
+    # ramp down
+    for speed in range(max_speed,0,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # -------- 100 % --------
+    max_speed = 100
+
+    # right
+    set_motor_direction("right")
+    DISPLAY.set_direction("right")
+    # ramp up
+    for speed in range(max_speed):
+        if not RUNNING_FLAG:
+            gentle_break(speed)
+            return
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # hold
+    for _ in range(hold_time_s * 10):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(0.1)
+
+    # ramp down
+    for speed in range(max_speed,0,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # left
+    set_motor_direction("left")
+    DISPLAY.set_direction("left")
+    # ramp up
+    for speed in range(max_speed):
+        if not RUNNING_FLAG:
+            gentle_break(speed)
+            return
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+    # hold
+    for _ in range(hold_time_s * 10):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(0.1)
+
+    # ramp down
+    for speed in range(max_speed,0,-1):
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
         time.sleep(0.1)
 
     disable_motor()
@@ -233,18 +442,18 @@ while True:
     if MODE_REQUEST:
         MODE_REQUEST = False
         if MOTOR_RUNNING:
-            display_text("Nicht moeglich", "Programm laeuft")
+            DISPLAY.lcd.display_text("Nicht moeglich", "Programm laeuft")
             time.sleep(3)
             last_displayed_mode = None
         else:
             CURRENT_MODE = (CURRENT_MODE + 1) % len(MODES)
     
-    current_display = MODES[CURRENT_MODE % len(MODES)]
+    current_mode = MODES[CURRENT_MODE % len(MODES)]
 
     # Update LCD only if changed
-    if last_displayed_mode != current_display:
-        display_text("Modus", current_display)
-        last_displayed_mode = current_display
+    if last_displayed_mode != current_mode:
+        DISPLAY.set_mode(current_mode)
+        last_displayed_mode = current_mode
 
     # Motor starten
     if RUNNING_FLAG and not MOTOR_RUNNING:
