@@ -2,6 +2,7 @@ from machine import ADC, I2C, Pin
 import _thread
 import time
 
+# ===================== LCD CLASS =====================
 class I2cLcd:
     RS = 0
     RW = 1
@@ -69,9 +70,11 @@ class I2cLcd:
         for c in s:
             self.write_byte(ord(c), 1)
 
+# ===================== INIT LCD =====================
 DISPLAY_I2C = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
 LCD = I2cLcd(DISPLAY_I2C, 0x27, 2, 16)
 
+# ===================== DAC / MOTOR =====================
 MCP4725_ADDR = 0x60
 MOTOR_I2C = I2C(1, scl=Pin(3), sda=Pin(2), freq=400000)
 EN_PIN = Pin(4, Pin.OUT)
@@ -85,44 +88,32 @@ R_BUTTON = Pin(28, Pin.IN, Pin.PULL_UP)
 DEBOUNCE_MS = 200
 MOTOR_RUNNING = False
 
+# ===================== FLAG REQUESTS =====================
 RUNNING_FLAG = False
-LAST_START_STOP_BUTTON_INTERACTION = 0
+RUNNING_REQUEST = False
+MODE_REQUEST = False
 MODE_PRESSED_FLAG = False
-LAST_MODE_BUTTON_INTERACTION = 0
-
-MODES = ["Auto 100", "Auto 50", "Manuell"]
 CURRENT_MODE = 0
 
+MODES = ["Auto 100", "Auto 50", "Manuell"]
+
+# ===================== DAC =====================
 def write_dac(value: int):
-    """
-    value: 0–4095 (12-bit DAC)
-    """
-    # MCP4725 erwartet:
-    #   0x40 als Command-Byte für 'Write DAC register'
-    #   dann HighByte und LowByte
+    """ value: 0–4095 (12-bit DAC) """
     high = (value >> 4) & 0xFF
     low  = (value << 4) & 0xFF
     MOTOR_I2C.writeto(MCP4725_ADDR, bytes([0x40, high, low]))
 
-# =================================================================================
-
+# ===================== MOTOR CONTROL =====================
 def enable_motor():
-    """Motor einschalten"""
     EN_PIN.value(1)
 
 def disable_motor():
-    """Motor ausschalten"""
     EN_PIN.value(0)
 
 def set_motor_direction(direction):
-    """
-    Richtung setzen:
-    direction = "forward" oder "reverse"
-    Motor muss vorher gestoppt sein (disable)
-    """
     FR_PIN.value(0)
-    time.sleep(0.1)   # kleine Pause für Sicherheit
-
+    time.sleep(0.1)
     if direction.lower() == "forward":
         FR_PIN.value(0)
     elif direction.lower() == "reverse":
@@ -131,57 +122,8 @@ def set_motor_direction(direction):
         raise ValueError("direction muss 'forward' oder 'reverse' sein")
 
 def set_motor_speed(speed: int):
-    """Set motor speed immediately (0–100)."""
-    val = int((speed / 100) * 4095)  # Convert 0–100% to 0–4095
+    val = int((speed / 100) * 4095)
     write_dac(val)
-
-# =================================================================================
-
-def display_text(line1, line2):
-    line1 = line1[:16]
-    line2 = line2[:16]
-
-    LCD.clear()
-
-    LCD.move_to(0, 0)
-    LCD.putstr(line1)
-    LCD.move_to(0, 1)
-    LCD.putstr(line2)
-
-# =================================================================================
-
-def handle_start_stop_button(pin):
-    global RUNNING_FLAG, LAST_START_STOP_BUTTON_INTERACTION
-
-    now = time.ticks_ms()
-    if time.ticks_diff(now, LAST_START_STOP_BUTTON_INTERACTION) < DEBOUNCE_MS:
-        return
-    LAST_START_STOP_BUTTON_INTERACTION = now
-
-    RUNNING_FLAG = not RUNNING_FLAG
-
-def handle_mode_button(pin):
-    global LAST_MODE_BUTTON_INTERACTION
-
-    now = time.ticks_ms()
-    if time.ticks_diff(now, LAST_MODE_BUTTON_INTERACTION) < DEBOUNCE_MS:
-        return
-    LAST_MODE_BUTTON_INTERACTION = now
-
-    global MODE_PRESSED_FLAG
-    MODE_PRESSED_FLAG = True
-
-def get_poti_value() -> float:
-    raw = POTI.read_u16()
-    return raw / 65535
-
-def get_lever_position() -> str:
-    return "left" if LEVER.value() == 0 else "right"
-
-# =================================================================================
-
-L_BUTTON.irq(trigger=Pin.IRQ_FALLING, handler=handle_start_stop_button)
-R_BUTTON.irq(trigger=Pin.IRQ_FALLING, handler=handle_mode_button)
 
 def gentle_break(current_speed):
     global MOTOR_RUNNING
@@ -191,99 +133,122 @@ def gentle_break(current_speed):
     disable_motor()
     MOTOR_RUNNING = False
 
+# ===================== LCD DISPLAY =====================
+def display_text(line1, line2):
+    line1 = line1[:16]
+    line2 = line2[:16]
+    LCD.clear()
+    LCD.move_to(0, 0)
+    LCD.putstr(line1)
+    LCD.move_to(0, 1)
+    LCD.putstr(line2)
+
+# ===================== ISR HANDLER =====================
+last_start_stop = 0
+last_mode_button = 0
+
+def handle_start_stop_button(pin):
+    global RUNNING_REQUEST, last_start_stop
+    now = time.ticks_ms()
+    if time.ticks_diff(now, last_start_stop) > DEBOUNCE_MS:
+        RUNNING_REQUEST = True
+        last_start_stop = now
+
+def handle_mode_button(pin):
+    global MODE_REQUEST, last_mode_button
+    now = time.ticks_ms()
+    if time.ticks_diff(now, last_mode_button) > DEBOUNCE_MS:
+        MODE_REQUEST = True
+        last_mode_button = now
+
+L_BUTTON.irq(trigger=Pin.IRQ_FALLING, handler=handle_start_stop_button)
+R_BUTTON.irq(trigger=Pin.IRQ_FALLING, handler=handle_mode_button)
+
+# ===================== UTILS =====================
+def get_poti_value() -> float:
+    return POTI.read_u16() / 65535
+
+def get_lever_position() -> str:
+    return "left" if LEVER.value() == 0 else "right"
+
+# ===================== MOTOR MODE 0 =====================
 def run_motor_mode_0():
-    print("MODE 0 STARTED")
     global MOTOR_RUNNING, RUNNING_FLAG
     MOTOR_RUNNING = True
     enable_motor()
-
-    # Motor vorwärts
     set_motor_direction("forward")
 
-    # Speed up to 25, break if flag is False
+    # ramp up
     for speed in range(25):
-        set_motor_speed(int(speed))
-        time.sleep(0.1)
-
         if not RUNNING_FLAG:
-            print("Vorzeitig bremsen (in ramp up)")
             gentle_break(speed)
             return
+        set_motor_speed(speed)
+        time.sleep(0.1)
 
-    for _ in range(100):  # 10 Sekunden in 0.1s-Schritten
+    # 10 Sekunden
+    for _ in range(100):
         if not RUNNING_FLAG:
-            print("Vorzeitig bremsen (in 10 sek)")
             gentle_break(25)
             return
         time.sleep(0.1)
 
+    # ramp down
     for j in range(25,0,-1):
-        set_motor_speed(int(j))
+        set_motor_speed(j)
         time.sleep(0.1)
 
-    if not RUNNING_FLAG:
-        disable_motor()
-        MOTOR_RUNNING = False
-        print("Motor vorzeitig gestoppt")
-        return
-
-    # Motor rückwärts
+    # reverse
     set_motor_direction("reverse")
-    
-    # Speed up to 25, break if flag is False
     for speed in range(25):
-        set_motor_speed(int(speed))
-        time.sleep(0.1)
-
         if not RUNNING_FLAG:
-            print("Vorzeitig bremsen (in ramp up)")
             gentle_break(speed)
             return
+        set_motor_speed(speed)
+        time.sleep(0.1)
 
-    for _ in range(100):  # 10 Sekunden in 0.1s-Schritten
+    for _ in range(100):
         if not RUNNING_FLAG:
-            print("Vorzeitig bremsen (in 10 sek)")
             gentle_break(25)
             return
         time.sleep(0.1)
 
     for j in range(25,0,-1):
-        set_motor_speed(int(j))
+        set_motor_speed(j)
         time.sleep(0.1)
 
-
-    disable_motor()  # Ende des Modus 0
+    disable_motor()
     MOTOR_RUNNING = False
-    print("Motorstop")
+    RUNNING_FLAG = False
 
-
+# ===================== MAIN LOOP =====================
 last_displayed_mode = None
 
 while True:
+    # ===== HANDLE REQUESTS =====
+    if RUNNING_REQUEST:
+        RUNNING_REQUEST = False
+        RUNNING_FLAG = not RUNNING_FLAG
+
+    if MODE_REQUEST:
+        MODE_REQUEST = False
+        if MOTOR_RUNNING:
+            display_text("Nicht moeglich", "Programm laeuft")
+            time.sleep(3)
+            last_displayed_mode = None
+        else:
+            CURRENT_MODE = (CURRENT_MODE + 1) % len(MODES)
+    
     current_display = MODES[CURRENT_MODE % len(MODES)]
 
-    # LCD nur aktualisieren, wenn sich der Modus geändert hat
+    # Update LCD only if changed
     if last_displayed_mode != current_display:
         display_text("Modus", current_display)
         last_displayed_mode = current_display
 
-    # Modus wechseln, nur wenn Motor nicht läuft
-    if MODE_PRESSED_FLAG:
-        MODE_PRESSED_FLAG = False
-        if RUNNING_FLAG:
-            display_text("Nicht moeglich", "Programm laeuft")
-            time.sleep(3)
-        else:
-            CURRENT_MODE += 1
-            current_display = MODES[CURRENT_MODE % len(MODES)]
-            display_text("Modus", current_display)
-
-    # Motor starten, nur wenn RUNNING = True und Motor noch nicht läuft
+    # Motor starten
     if RUNNING_FLAG and not MOTOR_RUNNING:
         if CURRENT_MODE == 0:
             _thread.start_new_thread(run_motor_mode_0, ())
-        # andere Modi hier ergänzen...
 
-    # Optional kleine Verzögerung für die Hauptloop
     time.sleep(0.05)
-
