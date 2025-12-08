@@ -236,8 +236,8 @@ L_BUTTON.irq(trigger=Pin.IRQ_FALLING, handler=handle_start_stop_button)
 R_BUTTON.irq(trigger=Pin.IRQ_FALLING, handler=handle_mode_button)
 
 # ===================== UTILS =====================
-def get_poti_value() -> float:
-    return POTI.read_u16() / 65535
+def get_poti_value() -> int:
+    return int((POTI.read_u16() / 65535) * 100)
 
 def get_lever_position() -> str:
     return "left" if LEVER.value() == 0 else "right"
@@ -442,9 +442,25 @@ def run_motor_mode_1():
     MOTOR_RUNNING = False
     RUNNING_FLAG = False
 
+# ===================== MOTOR MANUAL MODE =====================
+
+def run_motor_manual(speed, direction):
+    print("MANU", speed, direction)
+
+    global MOTOR_RUNNING, RUNNING_FLAG
+    MOTOR_RUNNING = True
+
+    while RUNNING_FLAG:
+        pass
+
+    MOTOR_RUNNING = False
+    RUNNING_FLAG = False
+
 # ===================== MAIN LOOP =====================
-last_displayed_mode = None
 DISPLAY.display_menu()
+last_displayed_mode = None
+manual_speed = None
+manual_direction = None
 
 while True:
     # ===== HANDLE REQUESTS =====
@@ -457,6 +473,8 @@ while True:
         if MOTOR_RUNNING:
             DISPLAY.display_text("Nicht moeglich", "Programm laeuft")
             time.sleep(3)
+            DISPLAY.lcd.clear()
+            DISPLAY.display_menu()
             last_displayed_mode = None
         else:
             CURRENT_MODE = (CURRENT_MODE + 1) % len(MODES)
@@ -468,16 +486,23 @@ while True:
         DISPLAY.set_mode(current_mode)
         last_displayed_mode = current_mode
 
-    if CURRENT_MODE == 2: # manual mode
-        pass
+    # ===== MANUAL MODE DISPLAY =====
+    if CURRENT_MODE == 2:  # manual mode
+        # immer Poti und Hebel lesen und Anzeige aktualisieren
+        manual_speed = get_poti_value()
+        manual_direction = get_lever_position()
+        DISPLAY.set_speed(manual_speed)
+        DISPLAY.set_direction(manual_direction)
 
-    # Motor starten
-    if RUNNING_FLAG and not MOTOR_RUNNING:
+        # Motor starten, wenn RUNNING_FLAG gesetzt und noch nicht läuft
+        if RUNNING_FLAG and not MOTOR_RUNNING:
+            _thread.start_new_thread(run_motor_manual, (manual_speed, manual_direction))
+
+    # ===== AUTOMATIC MODES =====
+    elif RUNNING_FLAG and not MOTOR_RUNNING:
         if CURRENT_MODE == 0:
             _thread.start_new_thread(run_motor_mode_0, ())
         elif CURRENT_MODE == 1:
             _thread.start_new_thread(run_motor_mode_1, ())
-        elif CURRENT_MODE == 2:
-            pass
 
     time.sleep(0.05)
