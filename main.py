@@ -177,6 +177,8 @@ POTI = ADC(Pin(26))
 L_BUTTON = Pin(27, Pin.IN, Pin.PULL_UP)
 R_BUTTON = Pin(28, Pin.IN, Pin.PULL_UP)
 
+STATUS_LED = Pin(7, Pin.OUT)
+
 DEBOUNCE_MS = 200
 TIME_BETWEEN_DIRECTIONS_S = 2
 MOTOR_RUNNING = False
@@ -343,7 +345,6 @@ def run_motor_mode_1():
 
 # ===================== MOTOR MANUAL MODE =====================
 def run_motor_manual(current_speed, current_direction):
-    # todo RUNNING_FLAG hat keinen effekt wenn motor nicht gerade rampt
     global MOTOR_RUNNING, RUNNING_FLAG
     MOTOR_RUNNING = True
     enable_motor()
@@ -407,6 +408,8 @@ manual_speed = None
 manual_direction = None
 
 while True:
+    STATUS_LED.value(1 if MOTOR_RUNNING else 0)
+    
     # ===== HANDLE REQUESTS =====
     if RUNNING_REQUEST:
         RUNNING_REQUEST = False
