@@ -66,9 +66,12 @@ class I2cLcd:
         addr = col + (0x40 * row)
         self.write_byte(0x80 | addr, 0)
 
+    def putchar(self, c):
+        self.write_byte(ord(c), 1)
+
     def putstr(self, s):
         for c in s:
-            self.write_byte(ord(c), 1)
+            self.putchar(c)
 
 # ===================== THREAD-SAFE DISPLAY =====================
 lcd_lock = _thread.allocate_lock()
@@ -135,9 +138,13 @@ class Display:
         self.lcd.putstr(mode_fmt)
 
     def update_speed(self, speed):
-        speed_fmt = ("%02d" % min(abs(speed), 99)) if speed > 0 else "--"
-        self.lcd.move_to(10, 1)
-        self.lcd.putstr(speed_fmt)
+        old_fmt = ("%02d" % min(abs(self.speed), 99)) if self.speed > 0 else "--"
+        new_fmt = ("%02d" % min(abs(speed), 99)) if speed > 0 else "--"
+
+        for i, (old_c, new_c) in enumerate(zip(old_fmt, new_fmt)):
+            if old_c != new_c:
+                self.lcd.move_to(10 + i, 1)
+                self.lcd.putchar(new_c)
 
     def update_direction(self, direction):
         arrow = "<-" if direction == "left" else ("->" if direction == "right" else "  ")
@@ -153,8 +160,8 @@ class Display:
         self.safe_lcd_write(self.update_mode, mode)
 
     def set_speed(self, speed):
-        self.speed = speed
         self.safe_lcd_write(self.update_speed, speed)
+        self.speed = speed
 
     def set_direction(self, direction):
         self.safe_lcd_write(self.update_direction, direction)
@@ -186,7 +193,7 @@ CURRENT_MODE = 0
 MODES = ["AUTO100", "AUTO45", "Manuell"]
 
 # ===================== Display Init =====================
-DISPLAY = Display(MODES[0], 0, "-")
+DISPLAY = Display(MODES[0], 0, None)
 
 # ===================== DAC =====================
 def write_dac(value: int):
@@ -340,9 +347,26 @@ def run_motor_manual(current_speed, current_direction):
     global MOTOR_RUNNING, RUNNING_FLAG
     MOTOR_RUNNING = True
     enable_motor()
+    speed = 0
+    
+    # -- initial ramp up
+    set_motor_direction(current_direction)
+    DISPLAY.set_direction(current_direction)
 
-    if not safe_motor_ramp_up(0, current_speed, current_direction, 0.1):
-        return
+    while speed != current_speed:
+        if not RUNNING_FLAG:
+            gentle_break(speed)
+            return
+        
+        if speed < current_speed:
+            speed += 1
+
+        set_motor_speed(speed)
+        DISPLAY.set_speed(speed)
+        time.sleep(0.1)
+
+        current_speed = get_poti_value()
+    # --
 
     while RUNNING_FLAG:
         speed = get_poti_value()
@@ -352,6 +376,7 @@ def run_motor_manual(current_speed, current_direction):
         if direction != current_direction:
             motor_ramp_down(current_speed, 0, 0.1)
             time.sleep(TIME_BETWEEN_DIRECTIONS_S)
+            direction = get_lever_position()
             current_speed = 0
             current_direction = direction
             set_motor_direction(current_direction)
@@ -394,6 +419,7 @@ while True:
             last_displayed_mode = None
         else:
             CURRENT_MODE = (CURRENT_MODE + 1) % len(MODES)
+
     
     current_mode = MODES[CURRENT_MODE % len(MODES)]
 
@@ -413,10 +439,14 @@ while True:
             _thread.start_new_thread(run_motor_manual, (manual_speed, manual_direction))
 
     # ===== AUTOMATIC MODES =====
-    elif RUNNING_FLAG and not MOTOR_RUNNING:
-        if CURRENT_MODE == 0:
-            _thread.start_new_thread(run_motor_mode_0, ())
-        elif CURRENT_MODE == 1:
-            _thread.start_new_thread(run_motor_mode_1, ())
+    else:
+        if not RUNNING_FLAG and not MOTOR_RUNNING:
+            DISPLAY.set_speed(0)
+            DISPLAY.set_direction(None)
+        if RUNNING_FLAG and not MOTOR_RUNNING:
+            if CURRENT_MODE == 0:
+                _thread.start_new_thread(run_motor_mode_0, ())
+            elif CURRENT_MODE == 1:
+                _thread.start_new_thread(run_motor_mode_1, ())
 
     time.sleep(0.05)
