@@ -82,8 +82,10 @@ class Display:
         self.display_i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
         self.lcd = I2cLcd(self.display_i2c, 0x27, 2, 16)
 
-    # Thread-safe wrapper
     def safe_lcd_write(self, func, *args, **kwargs):
+        global DISPLAY_BUSY
+        if DISPLAY_BUSY:
+            return  # Display ist gesperrt
         with lcd_lock:
             func(*args, **kwargs)
 
@@ -106,7 +108,26 @@ class Display:
         header = "Modus    %    " + arrow
         line   = "{} | {} | {}".format(mode_fmt, speed_fmt, dir_char)
 
-        self.display_text(header, line)
+        self._display_text_impl(header, line)
+
+    def display_error(self, msg1, msg2, duration=3):
+        global DISPLAY_BUSY
+        DISPLAY_BUSY = True
+
+        with lcd_lock:
+            self.lcd.clear()
+            self.lcd.move_to(0, 0)
+            self.lcd.putstr(msg1[:16])
+            self.lcd.move_to(0, 1)
+            self.lcd.putstr(msg2[:16])
+        
+        time.sleep(duration)
+
+        with lcd_lock:
+            self.lcd.clear()
+            self.display_menu()
+
+        DISPLAY_BUSY = False
 
     def update_mode(self, mode):
         mode_fmt = (mode + " " * 7)[:7]
@@ -153,6 +174,7 @@ DEBOUNCE_MS = 200
 TIME_BETWEEN_DIRECTIONS_S = 2
 MOTOR_RUNNING = False
 CURRENT_MOTOR_DIRECTION = None
+DISPLAY_BUSY = False
 
 # ===================== FLAG REQUESTS =====================
 RUNNING_FLAG = False
@@ -323,13 +345,11 @@ def run_motor_manual(current_speed, current_direction):
         return
 
     while RUNNING_FLAG:
-        print(RUNNING_FLAG)
         speed = get_poti_value()
         direction = get_lever_position()
 
         # Richtungswechsel
         if direction != current_direction:
-            print("RICHTUNG WECHSEL")
             motor_ramp_down(current_speed, 0, 0.1)
             time.sleep(TIME_BETWEEN_DIRECTIONS_S)
             current_speed = 0
@@ -349,8 +369,11 @@ def run_motor_manual(current_speed, current_direction):
 
         time.sleep(0.05)
 
+    motor_ramp_down(current_speed, 0, 0.1)
+
     MOTOR_RUNNING = False
     RUNNING_FLAG = False
+    disable_motor()
 
 # ===================== MAIN LOOP =====================
 DISPLAY.display_menu()
@@ -367,10 +390,7 @@ while True:
     if MODE_REQUEST:
         MODE_REQUEST = False
         if MOTOR_RUNNING:
-            DISPLAY.display_text("Nicht moeglich", "Programm laeuft")
-            time.sleep(3)
-            DISPLAY.lcd.clear()
-            DISPLAY.display_menu()
+            DISPLAY.display_error("Nicht moeglich", "Programm laeuft")
             last_displayed_mode = None
         else:
             CURRENT_MODE = (CURRENT_MODE + 1) % len(MODES)
