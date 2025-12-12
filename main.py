@@ -179,8 +179,9 @@ R_BUTTON = Pin(28, Pin.IN, Pin.PULL_UP)
 
 STATUS_LED = Pin(7, Pin.OUT)
 
-DEBOUNCE_MS = 200
-TIME_BETWEEN_DIRECTIONS_S = 2
+DEBOUNCE_MS = 300
+MOTOR_RAMP_SLEEP_S = 0.25
+TIME_BETWEEN_DIRECTIONS_S = 5
 MOTOR_RUNNING = False
 CURRENT_MOTOR_DIRECTION = None
 DISPLAY_BUSY = False
@@ -192,7 +193,7 @@ MODE_REQUEST = False
 MODE_PRESSED_FLAG = False
 CURRENT_MODE = 0
 
-MODES = ["AUTO100", "AUTO45", "Manuell"]
+MODES = ["A-4-100", "A-3-75", "Manuell"]
 
 # ===================== Display Init =====================
 DISPLAY = Display(MODES[0], 0, None)
@@ -248,7 +249,7 @@ def motor_ramp_down(current_speed:int, desired_speed:int, sleep_interval:float):
 
 def gentle_break(current_speed):
     global MOTOR_RUNNING
-    motor_ramp_down(current_speed, 0, 0.1)
+    motor_ramp_down(current_speed, 0, MOTOR_RAMP_SLEEP_S)
     disable_motor()
     MOTOR_RUNNING = False
 
@@ -285,29 +286,35 @@ def run_motor_mode_0():
     global MOTOR_RUNNING, RUNNING_FLAG
     MOTOR_RUNNING = True
     enable_motor()
-    hold_time_s = 10
+    hold_time_s = 60
     sleep_interval = 0.1
+    speed_list = [25, 50, 75, 100]
 
-    for max_speed in [25, 50, 75, 100]:
+    for max_speed in speed_list:
         # Right
-        if not safe_motor_ramp_up(0, max_speed, "right", sleep_interval):
+        if not safe_motor_ramp_up(0, max_speed, "right", MOTOR_RAMP_SLEEP_S):
             return
-        for _ in range(hold_time_s * 10):
+        for _ in range(hold_time_s * (1/sleep_interval)):
             if not RUNNING_FLAG:
                 gentle_break(max_speed)
                 return
             time.sleep(sleep_interval)
-        motor_ramp_down(max_speed, 0, sleep_interval)
+        motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
+
         time.sleep(TIME_BETWEEN_DIRECTIONS_S)
+
         # Left
-        if not safe_motor_ramp_up(0, max_speed, "left", sleep_interval):
+        if not safe_motor_ramp_up(0, max_speed, "left", MOTOR_RAMP_SLEEP_S):
             return
-        for _ in range(hold_time_s * 10):
+        for _ in range(hold_time_s * (1/sleep_interval)):
             if not RUNNING_FLAG:
                 gentle_break(max_speed)
                 return
             time.sleep(sleep_interval)
-        motor_ramp_down(max_speed, 0, sleep_interval)
+        motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
+
+        if max_speed != speed_list[-1]:
+            time.sleep(TIME_BETWEEN_DIRECTIONS_S)
 
     disable_motor()
     MOTOR_RUNNING = False
@@ -317,27 +324,33 @@ def run_motor_mode_1():
     global MOTOR_RUNNING, RUNNING_FLAG
     MOTOR_RUNNING = True
     enable_motor()
-    hold_time_s = 10
+    hold_time_s = 60
     sleep_interval = 0.1
+    speed_list = [25, 50, 75]
 
-    for max_speed in [15, 30, 45]:
-        if not safe_motor_ramp_up(0, max_speed, "right", sleep_interval):
+    for max_speed in speed_list:
+        if not safe_motor_ramp_up(0, max_speed, "right", MOTOR_RAMP_SLEEP_S):
             return
-        for _ in range(hold_time_s * 10):
+        for _ in range(hold_time_s * (1/sleep_interval)):
             if not RUNNING_FLAG:
                 gentle_break(max_speed)
                 return
             time.sleep(sleep_interval)
-        motor_ramp_down(max_speed, 0, sleep_interval)
+        motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
+
         time.sleep(TIME_BETWEEN_DIRECTIONS_S)
-        if not safe_motor_ramp_up(0, max_speed, "left", sleep_interval):
+
+        if not safe_motor_ramp_up(0, max_speed, "left", MOTOR_RAMP_SLEEP_S):
             return
-        for _ in range(hold_time_s * 10):
+        for _ in range(hold_time_s * (1/sleep_interval)):
             if not RUNNING_FLAG:
                 gentle_break(max_speed)
                 return
             time.sleep(sleep_interval)
-        motor_ramp_down(max_speed, 0, sleep_interval)
+        motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
+
+        if max_speed != speed_list[-1]:
+            time.sleep(TIME_BETWEEN_DIRECTIONS_S)
 
     disable_motor()
     MOTOR_RUNNING = False
@@ -364,7 +377,7 @@ def run_motor_manual(current_speed, current_direction):
 
         set_motor_speed(speed)
         DISPLAY.set_speed(speed)
-        time.sleep(0.1)
+        time.sleep(MOTOR_RAMP_SLEEP_S)
 
         current_speed = get_poti_value()
     # --
@@ -375,7 +388,7 @@ def run_motor_manual(current_speed, current_direction):
 
         # Richtungswechsel
         if direction != current_direction:
-            motor_ramp_down(current_speed, 0, 0.1)
+            motor_ramp_down(current_speed, 0, MOTOR_RAMP_SLEEP_S)
             time.sleep(TIME_BETWEEN_DIRECTIONS_S)
             direction = get_lever_position()
             current_speed = 0
@@ -385,17 +398,17 @@ def run_motor_manual(current_speed, current_direction):
 
         # Speed-Anpassung
         if speed > current_speed:
-            if not safe_motor_ramp_up(current_speed, speed, current_direction, 0.1):
+            if not safe_motor_ramp_up(current_speed, speed, current_direction, MOTOR_RAMP_SLEEP_S):
                 return
         elif speed < current_speed:
-            motor_ramp_down(current_speed, speed, 0.1)
+            motor_ramp_down(current_speed, speed, MOTOR_RAMP_SLEEP_S)
 
         # Nach der Rampenlogik erst current_speed aktualisieren
         current_speed = speed
 
         time.sleep(0.05)
 
-    motor_ramp_down(current_speed, 0, 0.1)
+    motor_ramp_down(current_speed, 0, MOTOR_RAMP_SLEEP_S)
 
     MOTOR_RUNNING = False
     RUNNING_FLAG = False
