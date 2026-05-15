@@ -193,7 +193,7 @@ MODE_REQUEST = False
 MODE_PRESSED_FLAG = False
 CURRENT_MODE = 0
 
-MODES = ["A-4-100", "A-3-75", "Manuell"]
+MODES = ["A-3-100", "Smart", "Manuell"]
 
 # ===================== Display Init =====================
 DISPLAY = Display(MODES[0], 0, None)
@@ -288,7 +288,7 @@ def run_motor_mode_0():
     enable_motor()
     hold_time_s = 60
     sleep_interval = 0.1
-    speed_list = [25, 50, 75, 100]
+    speed_list = [40, 70, 100]
 
     for max_speed in speed_list:
         # Right
@@ -326,31 +326,67 @@ def run_motor_mode_1():
     enable_motor()
     hold_time_s = 60
     sleep_interval = 0.1
-    speed_list = [25, 50, 75]
 
-    for max_speed in speed_list:
-        if not safe_motor_ramp_up(0, max_speed, "right", MOTOR_RAMP_SLEEP_S):
+    max_speed = 40
+    if not safe_motor_ramp_up(0, max_speed, "right", MOTOR_RAMP_SLEEP_S):
+        return
+    for _ in range(hold_time_s * (1/sleep_interval)):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
             return
-        for _ in range(hold_time_s * (1/sleep_interval)):
-            if not RUNNING_FLAG:
-                gentle_break(max_speed)
-                return
-            time.sleep(sleep_interval)
-        motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
+        time.sleep(sleep_interval)
+    motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
 
-        time.sleep(TIME_BETWEEN_DIRECTIONS_S)
+    time.sleep(TIME_BETWEEN_DIRECTIONS_S)
 
-        if not safe_motor_ramp_up(0, max_speed, "left", MOTOR_RAMP_SLEEP_S):
+    if not safe_motor_ramp_up(0, max_speed, "left", MOTOR_RAMP_SLEEP_S):
+        return
+    for _ in range(hold_time_s * (1/sleep_interval)):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
             return
-        for _ in range(hold_time_s * (1/sleep_interval)):
-            if not RUNNING_FLAG:
-                gentle_break(max_speed)
-                return
-            time.sleep(sleep_interval)
-        motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
+        time.sleep(sleep_interval)
 
-        if max_speed != speed_list[-1]:
-            time.sleep(TIME_BETWEEN_DIRECTIONS_S)
+    max_speed = 70
+    if not safe_motor_ramp_up(40, max_speed, "left", MOTOR_RAMP_SLEEP_S):
+        return
+    for _ in range(hold_time_s * (1/sleep_interval)):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(sleep_interval)
+    motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
+
+    time.sleep(TIME_BETWEEN_DIRECTIONS_S)
+
+    if not safe_motor_ramp_up(0, max_speed, "right", MOTOR_RAMP_SLEEP_S):
+        return
+    for _ in range(hold_time_s * (1/sleep_interval)):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(sleep_interval)
+        
+    max_speed = 100
+    if not safe_motor_ramp_up(70, max_speed, "right", MOTOR_RAMP_SLEEP_S):
+        return
+    for _ in range(hold_time_s * (1/sleep_interval)):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(sleep_interval)
+    motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
+
+    time.sleep(TIME_BETWEEN_DIRECTIONS_S)
+
+    if not safe_motor_ramp_up(0, max_speed, "left", MOTOR_RAMP_SLEEP_S):
+        return
+    for _ in range(hold_time_s * (1/sleep_interval)):
+        if not RUNNING_FLAG:
+            gentle_break(max_speed)
+            return
+        time.sleep(sleep_interval)
+    motor_ramp_down(max_speed, 0, MOTOR_RAMP_SLEEP_S)
 
     disable_motor()
     MOTOR_RUNNING = False
